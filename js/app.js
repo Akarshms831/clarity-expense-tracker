@@ -78,43 +78,10 @@ function gateError(message){$('gateError').textContent=message||''}
 function showRetry(show=true){const b=$('gateRetry');if(b)b.hidden=!show}
 function unlockGate(){ $('clarityGate').hidden=true;document.body.style.overflow=''; }
 function setupGate(){document.body.style.overflow='hidden';$('clarityGate').hidden=false;$('gateConfig').hidden=true;$('gateLogin').hidden=false;makeSupa();$('gateSignIn').onclick=()=>gateAuth('signin');$('gateSignUp').onclick=()=>gateAuth('signup');const retry=$('gateRetry');if(retry)retry.onclick=()=>retryCloudLoad();['gateEmail','gatePassword'].forEach(id=>$(id).addEventListener('keydown',e=>{if(e.key==='Enter')gateAuth('signin')}));if(!supa)gateError('Could not load the login service. Check your internet connection and refresh.')}
-function explainCloudError(e){const msg=String(e?.message||e?.details||e?.hint||e||'Unknown error');if(/failed to fetch|load failed|networkerror|network request failed/i.test(msg))return 'Signed in, but the cloud data request failed after retries. Your existing cloud data was not overwritten. Check Supabase availability, then retry. If this continues, inspect the browser console for “Clarity cloud read attempt” details. Session retained.';return 'Could not load your account data: '+msg.slice(0,320)}
-async function retryCloudLoad(){gateError('Retrying secure cloud data load…');showRetry(false);try{makeSupa();if(!supa)throw new Error('Supabase client could not start. Check your connection and refresh.');if(!session){const sr=await supa.auth.getSession();if(sr.error)throw sr.error;session=sr.data.session}if(!session)throw new Error('Your session has expired. Please sign in again.');await loadCloud();unlockGate();status();render()}catch(e){console.error('Clarity cloud retry error:',e);gateError(explainCloudError(e));showRetry(!!session)}}
-async function connectSaved(){if(!state.supabaseUrl||!state.supabaseKey){setupGate();return}makeSupa();if(!supa){setupGate();gateError('Supabase library could not load. Check your internet connection and refresh.');return}try{const r=await supa.auth.getSession();if(r.error)throw r.error;session=r.data.session;if(session){await loadCloud();unlockGate()}else setupGate();status()}catch(e){console.error('Clarity session/cloud load error:',e);setupGate();gateError(explainCloudError(e));showRetry(!!session)}}
-async function loadCloud(){
- if(!supa||!session)throw new Error('You are not signed in. Please sign in again.');
- // Retry transient Safari/network failures. Never initialize an empty account unless
- // the database query itself succeeded and confirmed that no row exists.
- let r,lastError;
- for(let attempt=1;attempt<=3;attempt++){
-  try{
-   r=await supa.from('clarity_user_data').select('payload').eq('user_id',session.user.id).maybeSingle();
-   if(r.error)throw r.error;
-   lastError=null;break;
-  }catch(e){
-   lastError=e;
-   console.error('Clarity cloud read attempt '+attempt+' failed:',e);
-   if(attempt<3)await new Promise(resolve=>setTimeout(resolve,700*attempt));
-  }
- }
- if(lastError){
-  const detail=String(lastError.message||lastError.details||lastError.hint||lastError||'Unknown error');
-  throw new Error('Could not read your existing cloud data after 3 attempts. Your cloud records were not changed. Details: '+detail.slice(0,220));
- }
- if(r.data?.payload&&Array.isArray(r.data.payload.expenses)){
-  const url=state.supabaseUrl,key=state.supabaseKey;
-  state={...fresh(),...r.data.payload,supabaseUrl:url,supabaseKey:key,userId:session.user.id};
-  activeMonth=state.activeMonth||monthKey(today);persist();render();
- }else{
-  // A successful query returned no row: this is a genuinely new account.
-  const url=state.supabaseUrl,key=state.supabaseKey;
-  state={...fresh(),supabaseUrl:url,supabaseKey:key,userId:session.user.id};
-  activeMonth=state.activeMonth||monthKey(today);
-  await syncCloud(true);
-  persist();
- }
- status();
-}
+function explainCloudError(e){const msg=String(e?.message||e||'Unknown error');const parts=[];if(e?.name)parts.push('Type: '+String(e.name));if(msg)parts.push('Message: '+msg);if(e?.code)parts.push('Code: '+String(e.code));if(e?.status)parts.push('HTTP: '+String(e.status));if(e?.details)parts.push('Details: '+String(e.details));if(e?.hint)parts.push('Hint: '+String(e.hint));const diagnostic=parts.join(' · ').slice(0,650);if(/failed to fetch|load failed|networkerror|network request failed/i.test(msg))return 'Signed in, but the cloud database request failed. Your existing cloud data was not overwritten. Technical details: '+(diagnostic||'No browser error details were provided.')+' If this repeats on both Wi-Fi and mobile data, the app needs a code-level/network fix; you do not need to change browser settings.';return 'Could not load your account data. '+(diagnostic||'Unknown error')}
+async function retryCloudLoad(){gateError('Retrying secure cloud data load…');showRetry(false);try{makeSupa();if(!supa)throw new Error('Supabase client could not start. Check your connection and refresh.');if(!session){const sr=await supa.auth.getSession();if(sr.error)throw sr.error;session=sr.data.session}if(!session)throw new Error('Your session has expired. Please sign in again.');await loadCloud();unlockGate();status();render()}catch(e){console.error('Clarity cloud retry error:',{name:e?.name,message:e?.message,code:e?.code,status:e?.status,details:e?.details,hint:e?.hint,error:e});gateError(explainCloudError(e));showRetry(!!session)}}
+async function connectSaved(){if(!state.supabaseUrl||!state.supabaseKey){setupGate();return}makeSupa();if(!supa){setupGate();gateError('Supabase library could not load. Check your internet connection and refresh.');return}try{const r=await supa.auth.getSession();if(r.error)throw r.error;session=r.data.session;if(session){await loadCloud();unlockGate()}else setupGate();status()}catch(e){console.error('Clarity session/cloud load error:',{name:e?.name,message:e?.message,code:e?.code,status:e?.status,details:e?.details,hint:e?.hint,error:e});setupGate();gateError(explainCloudError(e));showRetry(!!session)}}
+async function loadCloud(){if(!supa||!session)throw new Error('You are not signed in. Please sign in again.');const r=await supa.from('clarity_user_data').select('payload').eq('user_id',session.user.id).maybeSingle();if(r.error)throw r.error;if(r.data?.payload&&Array.isArray(r.data.payload.expenses)){const url=state.supabaseUrl,key=state.supabaseKey;state={...fresh(),...r.data.payload,supabaseUrl:url,supabaseKey:key,userId:session.user.id};activeMonth=state.activeMonth||monthKey(today);persist();render()}else{const url=state.supabaseUrl,key=state.supabaseKey;state={...fresh(),supabaseUrl:url,supabaseKey:key,userId:session.user.id};activeMonth=state.activeMonth||monthKey(today);await syncCloud();persist()}status()}
 async function gateAuth(action){gateError('');showRetry(false);makeSupa();if(!supa){gateError('Supabase client could not start. Check your connection and refresh.');return}let email=$('gateEmail').value.trim(),password=$('gatePassword').value;if(!email||password.length<6){gateError('Enter a valid email and password of at least 6 characters.');return}$('gateSignIn').disabled=$('gateSignUp').disabled=true;try{let r=action==='signup'?await supa.auth.signUp({email,password}):await supa.auth.signInWithPassword({email,password});if(r.error)throw r.error;if(action==='signup'&&!r.data.session){gateError('Account created. Check your email to confirm it, then sign in.');return}session=r.data.session;if(!session)throw new Error('No active session returned. Confirm your email if required, then sign in.');state.userId=session.user.id;await loadCloud();unlockGate();status();render()}catch(e){console.error('Clarity sign-in/load error:',e);gateError(explainCloudError(e));showRetry(!!session)}finally{$('gateSignIn').disabled=$('gateSignUp').disabled=false}}
 function queueSync(){if(!session||!supa)return;clearTimeout(syncTimer);syncTimer=setTimeout(()=>syncCloud(false),600)}
 async function syncCloud(show=false){if(!session||!supa){if(show)notify('Sign in to Supabase in Settings first.');return}try{let r=await supa.from('clarity_user_data').upsert({user_id:session.user.id,payload:{...state,activeMonth,supabaseUrl:undefined,supabaseKey:undefined,userId:session.user.id},updated_at:new Date().toISOString()},{onConflict:'user_id'});if(r.error)throw r.error;if(show)notify('Cloud data synced')}catch(e){if(show)notify('Sync failed: check SQL schema and row-level security.');console.warn(e)}}
