@@ -72,19 +72,132 @@ function exportCSV(){let rows=[['ID','Date','Title','Category','Amount','Payment
 function downloadBlob(blob,name){let u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1500)}
 document.addEventListener('change',async e=>{if(e.target.id==='restoreFile'&&e.target.files[0])try{let x=JSON.parse(await e.target.files[0].text());if(!x||!Array.isArray(x.expenses)||!confirm('Restore this backup and replace the current local data?'))return;state={...fresh(),...x};activeMonth=state.activeMonth||monthKey(today);persist();render();queueSync();notify('Backup restored')}catch{notify('Invalid JSON backup')}});
 function saveCloudConfig(){state.supabaseUrl=$('sbUrl').value.trim().replace(/\/$/,'');state.supabaseKey=$('sbKey').value.trim();persist();if(!state.supabaseUrl||!state.supabaseKey)return notify('Enter the Supabase URL and public key.');makeSupa();if(!supa)return notify('Could not initialize Supabase. Check URL/key and internet.');notify('Connection details saved. Sign in to sync online.');openAuth()}
-function makeSupa(){if(!window.supabase||!state.supabaseUrl||!state.supabaseKey){supa=null;return}try{supa=window.supabase.createClient(state.supabaseUrl,state.supabaseKey)}catch{supa=null}}
-function openAuth(){if(!state.supabaseUrl||!state.supabaseKey){notify('Enter Supabase URL and public key in Settings first.');return}makeSupa();$('authBody').innerHTML=`<div class="notice"><strong>Use your own account</strong>Create an account once, then sign in on other devices to access your cloud data.</div><div class="field" style="margin-top:14px"><label>Email</label><input id="authEmail" type="email" required placeholder="you@example.com"></div><div class="field" style="margin-top:10px"><label>Password</label><input id="authPassword" type="password" required minlength="6" placeholder="At least 6 characters"></div><div class="form-actions"><button class="btn secondary" onclick="authAction('signup')">Create account</button><button class="btn primary" onclick="authAction('signin')">Sign in</button></div><p class="small-note">If email confirmation is enabled in Supabase, confirm your email before signing in.</p>`;$('authModal').classList.add('open')}
-async function authAction(action){if(!supa)makeSupa();let email=$('authEmail').value.trim(),password=$('authPassword').value;if(!email||password.length<6)return notify('Enter a valid email and password (6+ characters).');try{let r=action==='signup'?await supa.auth.signUp({email,password}):await supa.auth.signInWithPassword({email,password});if(r.error)throw r.error;if(action==='signup'&&!r.data.session){notify('Account created. Check your email if confirmation is enabled.');return}session=r.data.session;state.userId=session.user.id;await loadCloud();$('authModal').classList.remove('open');$('settingsModal').classList.remove('open');unlockGate();status();render();notify('Cloud account connected')}catch(e){notify(String(e.message||e).slice(0,160))}}
+function makeSupa(){
+  if(!window.supabase||!state.supabaseUrl||!state.supabaseKey){supa=null;return}
+  if(supa&&supa.__clarityUrl===state.supabaseUrl&&supa.__clarityKey===state.supabaseKey)return;
+  try{
+    supa=window.supabase.createClient(state.supabaseUrl,state.supabaseKey,{
+      auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}
+    });
+    Object.defineProperties(supa,{
+      __clarityUrl:{value:state.supabaseUrl},
+      __clarityKey:{value:state.supabaseKey}
+    });
+  }catch(e){console.error('Clarity client initialization failed',e);supa=null}
+}
+function openAuth(){if(!state.supabaseUrl||!state.supabaseKey){notify('The Clarity cloud connection is not configured.');return}makeSupa();$('authBody').innerHTML=`<div class="notice"><strong>Use your own account</strong>Create an account once, then sign in on other devices to access your cloud data.</div><div class="field" style="margin-top:14px"><label>Email</label><input id="authEmail" type="email" required placeholder="you@example.com"></div><div class="field" style="margin-top:10px"><label>Password</label><input id="authPassword" type="password" required minlength="6" placeholder="At least 6 characters"></div><div class="form-actions"><button class="btn secondary" onclick="authAction('signup')">Create account</button><button class="btn primary" onclick="authAction('signin')">Sign in</button></div><p class="small-note">If email confirmation is enabled in Supabase, confirm your email before signing in.</p>`;$('authModal').classList.add('open')}
 function gateError(message){$('gateError').textContent=message||''}
 function showRetry(show=true){const b=$('gateRetry');if(b)b.hidden=!show}
-function unlockGate(){ $('clarityGate').hidden=true;document.body.style.overflow=''; }
-function setupGate(){document.body.style.overflow='hidden';$('clarityGate').hidden=false;$('gateConfig').hidden=true;$('gateLogin').hidden=false;makeSupa();$('gateSignIn').onclick=()=>gateAuth('signin');$('gateSignUp').onclick=()=>gateAuth('signup');const retry=$('gateRetry');if(retry)retry.onclick=()=>retryCloudLoad();['gateEmail','gatePassword'].forEach(id=>$(id).addEventListener('keydown',e=>{if(e.key==='Enter')gateAuth('signin')}));if(!supa)gateError('Could not load the login service. Check your internet connection and refresh.')}
-function explainCloudError(e){const msg=String(e?.message||e||'Unknown error');const parts=[];if(e?.name)parts.push('Type: '+String(e.name));if(msg)parts.push('Message: '+msg);if(e?.code)parts.push('Code: '+String(e.code));if(e?.status)parts.push('HTTP: '+String(e.status));if(e?.details)parts.push('Details: '+String(e.details));if(e?.hint)parts.push('Hint: '+String(e.hint));const diagnostic=parts.join(' · ').slice(0,650);if(/failed to fetch|load failed|networkerror|network request failed/i.test(msg))return 'Signed in, but the cloud database request failed. Your existing cloud data was not overwritten. Technical details: '+(diagnostic||'No browser error details were provided.')+' If this repeats on both Wi-Fi and mobile data, the app needs a code-level/network fix; you do not need to change browser settings.';return 'Could not load your account data. '+(diagnostic||'Unknown error')}
-async function retryCloudLoad(){gateError('Retrying secure cloud data load…');showRetry(false);try{makeSupa();if(!supa)throw new Error('Supabase client could not start. Check your connection and refresh.');if(!session){const sr=await supa.auth.getSession();if(sr.error)throw sr.error;session=sr.data.session}if(!session)throw new Error('Your session has expired. Please sign in again.');await loadCloud();unlockGate();status();render()}catch(e){console.error('Clarity cloud retry error:',{name:e?.name,message:e?.message,code:e?.code,status:e?.status,details:e?.details,hint:e?.hint,error:e});gateError(explainCloudError(e));showRetry(!!session)}}
-async function connectSaved(){if(!state.supabaseUrl||!state.supabaseKey){setupGate();return}makeSupa();if(!supa){setupGate();gateError('Supabase library could not load. Check your internet connection and refresh.');return}try{const r=await supa.auth.getSession();if(r.error)throw r.error;session=r.data.session;if(session){await loadCloud();unlockGate()}else setupGate();status()}catch(e){console.error('Clarity session/cloud load error:',{name:e?.name,message:e?.message,code:e?.code,status:e?.status,details:e?.details,hint:e?.hint,error:e});setupGate();gateError(explainCloudError(e));showRetry(!!session)}}
-async function loadCloud(){if(!supa||!session)throw new Error('You are not signed in. Please sign in again.');const r=await supa.from('clarity_user_data').select('payload').eq('user_id',session.user.id).maybeSingle();if(r.error)throw r.error;if(r.data?.payload&&Array.isArray(r.data.payload.expenses)){const url=state.supabaseUrl,key=state.supabaseKey;state={...fresh(),...r.data.payload,supabaseUrl:url,supabaseKey:key,userId:session.user.id};activeMonth=state.activeMonth||monthKey(today);persist();render()}else{const url=state.supabaseUrl,key=state.supabaseKey;state={...fresh(),supabaseUrl:url,supabaseKey:key,userId:session.user.id};activeMonth=state.activeMonth||monthKey(today);await syncCloud();persist()}status()}
-async function gateAuth(action){gateError('');showRetry(false);makeSupa();if(!supa){gateError('Supabase client could not start. Check your connection and refresh.');return}let email=$('gateEmail').value.trim(),password=$('gatePassword').value;if(!email||password.length<6){gateError('Enter a valid email and password of at least 6 characters.');return}$('gateSignIn').disabled=$('gateSignUp').disabled=true;try{let r=action==='signup'?await supa.auth.signUp({email,password}):await supa.auth.signInWithPassword({email,password});if(r.error)throw r.error;if(action==='signup'&&!r.data.session){gateError('Account created. Check your email to confirm it, then sign in.');return}session=r.data.session;if(!session)throw new Error('No active session returned. Confirm your email if required, then sign in.');state.userId=session.user.id;await loadCloud();unlockGate();status();render()}catch(e){console.error('Clarity sign-in/load error:',e);gateError(explainCloudError(e));showRetry(!!session)}finally{$('gateSignIn').disabled=$('gateSignUp').disabled=false}}
-function queueSync(){if(!session||!supa)return;clearTimeout(syncTimer);syncTimer=setTimeout(()=>syncCloud(false),600)}
-async function syncCloud(show=false){if(!session||!supa){if(show)notify('Sign in to Supabase in Settings first.');return}try{let r=await supa.from('clarity_user_data').upsert({user_id:session.user.id,payload:{...state,activeMonth,supabaseUrl:undefined,supabaseKey:undefined,userId:session.user.id},updated_at:new Date().toISOString()},{onConflict:'user_id'});if(r.error)throw r.error;if(show)notify('Cloud data synced')}catch(e){if(show)notify('Sync failed: check SQL schema and row-level security.');console.warn(e)}}
+function unlockGate(){$('clarityGate').hidden=true;document.body.style.overflow=''}
+function setupGate(){document.body.style.overflow='hidden';$('clarityGate').hidden=false;$('gateConfig').hidden=true;$('gateLogin').hidden=false;makeSupa();$('gateSignIn').onclick=()=>gateAuth('signin');$('gateSignUp').onclick=()=>gateAuth('signup');const retry=$('gateRetry');if(retry)retry.onclick=()=>retryCloudLoad();if(!supa)gateError('The secure login library did not initialize. Please try again shortly.')}
+function errorDetails(e){return {name:e?.name||'Error',message:String(e?.message||e||'Unknown error'),code:e?.code||null,status:e?.status||e?.statusCode||null,details:e?.details||null,hint:e?.hint||null}}
+function explainCloudError(e,stage='cloud data load'){
+  const d=errorDetails(e),parts=[`Stage: ${stage}`,`Type: ${d.name}`,`Message: ${d.message}`];
+  if(d.code)parts.push(`Code: ${d.code}`);if(d.status)parts.push(`HTTP: ${d.status}`);if(d.details)parts.push(`Details: ${d.details}`);if(d.hint)parts.push(`Hint: ${d.hint}`);
+  const info=parts.join(' · ').slice(0,650);
+  if(/AuthRetryableFetchError|failed to fetch|load failed|networkerror|network request failed/i.test(d.name+' '+d.message))return `Clarity could not complete a request to Supabase during ${stage}. No cloud data was written or deleted. ${info}`;
+  if(d.code==='CLARITY_ROW_MISSING')return 'Your account is valid, but no Clarity data row was found for it. Nothing was created, replaced or deleted. Your existing local recovery copy, if present, remains on this device.';
+  return `Clarity could not complete ${stage}. No cloud data was written or deleted. ${info}`;
+}
+async function readCloudRecord(){
+  if(!supa||!session)throw new Error('No authenticated session is available.');
+  const result=await supa.from('clarity_user_data').select('payload,updated_at').eq('user_id',session.user.id).maybeSingle();
+  if(result.error)throw result.error;
+  if(!result.data){const e=new Error('No row exists in public.clarity_user_data for this signed-in account.');e.code='CLARITY_ROW_MISSING';throw e}
+  const payload=result.data.payload;
+  if(!payload||typeof payload!=='object'||!Array.isArray(payload.expenses)){
+    const e=new Error('The saved cloud payload does not match the expected Clarity data format.');e.code='CLARITY_PAYLOAD_INVALID';throw e;
+  }
+  return {payload,updatedAt:result.data.updated_at||null};
+}
+function saveLocalRecoveryCopy(){
+  try{
+    const raw=localStorage.getItem(STORE);if(!raw)return;
+    const copy=JSON.parse(raw);const hasData=(copy.expenses?.length||Object.keys(copy.salaries||{}).length||Object.keys(copy.monthlyBudgets||{}).length);
+    if(hasData)localStorage.setItem('clarityLocalRecoveryBackupV1',JSON.stringify({savedAt:new Date().toISOString(),data:copy}));
+  }catch(e){console.warn('Could not create local recovery snapshot',e)}
+}
+async function loadCloud(){
+  const {payload}=await readCloudRecord();
+  // Preserve a local recovery snapshot before the cloud copy becomes the active dataset.
+  saveLocalRecoveryCopy();
+  const url=state.supabaseUrl,key=state.supabaseKey;
+  state={...fresh(),...payload,supabaseUrl:url,supabaseKey:key,userId:session.user.id};
+  state.categories=Array.isArray(state.categories)&&state.categories.length?state.categories:[...DEFAULT_CATS];
+  activeMonth=state.activeMonth||monthKey(today);state.activeMonth=activeMonth;
+  persist();render();status();
+}
+async function createInitialCloudRecord(){
+  // INSERT (never UPSERT) is used only for a just-created account, so it cannot replace an existing row.
+  const initial={...fresh(),userId:session.user.id};
+  const safePayload={...initial,supabaseUrl:undefined,supabaseKey:undefined};
+  const result=await supa.from('clarity_user_data').insert({user_id:session.user.id,payload:safePayload,updated_at:new Date().toISOString()});
+  if(result.error)throw result.error;
+  state={...initial,supabaseUrl:state.supabaseUrl,supabaseKey:state.supabaseKey};activeMonth=state.activeMonth;persist();
+}
+async function gateAuth(action){
+  gateError('');showRetry(false);makeSupa();
+  if(!supa){gateError('The Supabase login service is unavailable. The dashboard data has not been changed.');return}
+  const email=$('gateEmail').value.trim(),password=$('gatePassword').value;
+  if(!email||password.length<6){gateError('Enter a valid email and password of at least 6 characters.');return}
+  $('gateSignIn').disabled=$('gateSignUp').disabled=true;
+  let stage='authentication';
+  try{
+    const authResult=action==='signup'?await supa.auth.signUp({email,password}):await supa.auth.signInWithPassword({email,password});
+    if(authResult.error)throw authResult.error;
+    if(action==='signup'&&!authResult.data.session){gateError('Account created. Confirm your email, then sign in. No financial data was changed.');return}
+    session=authResult.data.session;
+    if(!session)throw new Error('Supabase did not return an active session.');
+    state.userId=session.user.id;
+    stage='cloud data read';
+    try{await loadCloud()}
+    catch(e){
+      if(action==='signup'&&e?.code==='CLARITY_ROW_MISSING'){
+        stage='initial cloud record creation';await createInitialCloudRecord();
+      }else throw e;
+    }
+    unlockGate();status();render();
+  }catch(e){
+    console.error('Clarity operation failed:',{stage,...errorDetails(e),error:e});
+    gateError(explainCloudError(e,stage));showRetry(!!session);
+  }finally{$('gateSignIn').disabled=$('gateSignUp').disabled=false}
+}
+async function retryCloudLoad(){
+  gateError('Checking your secure session and reading your cloud data…');showRetry(false);
+  try{
+    makeSupa();if(!supa)throw new Error('Supabase client could not initialize.');
+    if(!session){const r=await supa.auth.getSession();if(r.error)throw r.error;session=r.data.session}
+    if(!session)throw new Error('Your session has expired. Please sign in again.');
+    await loadCloud();unlockGate();status();render();
+  }catch(e){console.error('Clarity retry failed:',errorDetails(e),e);gateError(explainCloudError(e,'session recovery / cloud data read'));showRetry(!!session)}
+}
+async function connectSaved(){
+  makeSupa();if(!supa){setupGate();gateError('The Supabase library did not initialize. No data was changed.');return}
+  try{
+    const r=await supa.auth.getSession();if(r.error)throw r.error;session=r.data.session;
+    if(session){await loadCloud();unlockGate()}else setupGate();status();
+  }catch(e){console.error('Clarity startup failed:',errorDetails(e),e);setupGate();gateError(explainCloudError(e,'saved session recovery / cloud data read'));showRetry(!!session)}
+}
+async function authAction(action){
+  if(!supa)makeSupa();const email=$('authEmail').value.trim(),password=$('authPassword').value;
+  if(!email||password.length<6)return notify('Enter a valid email and password (6+ characters).');
+  try{
+    const r=action==='signup'?await supa.auth.signUp({email,password}):await supa.auth.signInWithPassword({email,password});if(r.error)throw r.error;
+    if(action==='signup'&&!r.data.session){notify('Account created. Confirm your email, then sign in.');return}
+    session=r.data.session;if(!session)throw new Error('No active session was returned.');state.userId=session.user.id;
+    try{await loadCloud()}catch(e){if(action==='signup'&&e?.code==='CLARITY_ROW_MISSING')await createInitialCloudRecord();else throw e}
+    $('authModal').classList.remove('open');$('settingsModal').classList.remove('open');unlockGate();status();render();notify('Cloud account connected');
+  }catch(e){console.error('Clarity account connection failed:',errorDetails(e),e);notify(explainCloudError(e,'authentication / cloud data read').slice(0,220))}
+}
+function queueSync(){if(!session||!supa)return;clearTimeout(syncTimer);syncTimer=setTimeout(()=>syncCloud(false),800)}
+async function syncCloud(show=false){
+  if(!session||!supa){if(show)notify('Sign in to sync your Clarity data.');return false}
+  try{
+    const payload={...state,activeMonth,supabaseUrl:undefined,supabaseKey:undefined,userId:session.user.id};
+    const result=await supa.from('clarity_user_data').upsert({user_id:session.user.id,payload,updated_at:new Date().toISOString()},{onConflict:'user_id'});
+    if(result.error)throw result.error;
+    if(show)notify('Cloud data synced successfully');return true;
+  }catch(e){console.error('Clarity cloud sync failed:',errorDetails(e),e);if(show)notify('Cloud sync failed: '+String(e.message||e).slice(0,130));return false}
+}
 async function signOutCloud(){if(session&&supa){try{await supa.auth.signOut()}catch{}}session=null;state.userId=null;status();setupGate();$('gateConfig').hidden=true;$('gateLogin').hidden=false;gateError('You have signed out. Sign in to view your private dashboard.');notify('Signed out.');render()}
 init();window.addEventListener('resize',()=>{if(currentView==='overview'){drawTrend('trendChart');drawDonut()}if(currentView==='insights')drawTrend('insightChart')});

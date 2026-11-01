@@ -1,29 +1,38 @@
-# Clarity — Multi-user expense tracker
+# Clarity — safe application rebuild
 
-This folder contains the Clarity website and Supabase backend files. The interface and application logic are separated into HTML, CSS, and JavaScript files.
+This rebuild keeps the existing Clarity interface and Supabase data model. It does **not** require a database migration.
 
-## Files
-- `index.html` — page markup and CDN dependencies
-- `css/styles.css` — responsive Liquid Glass styling
-- `js/app.js` — dashboard, authentication, cloud sync, profile, exports, and account UI
-- `supabase_schema.sql` — database table and row-level security policies
-- `supabase/functions/delete-account/index.ts` — server-side account deletion endpoint
+## Important: protect your existing data
 
-## Publish on GitHub Pages
-Upload the **contents** of this folder into the root of the existing repository, preserving the `css/`, `js/`, and `supabase/` folder structure. Configure Pages to publish from `main` and `/(root)`.
+- Keep using the existing Supabase project and the existing `public.clarity_user_data` table.
+- Do **not** run a new schema, drop/recreate the table, delete rows, or create a replacement database.
+- The existing SQL schema is included for reference only and is unchanged. It is not an installation step for this update.
+- The browser uses only the existing Supabase project URL and publishable key. No service-role key is included.
 
-## Supabase setup
-1. Confirm the Project URL and browser-safe publishable key in `js/app.js` / application defaults are correct for your project. A publishable key is expected to be public; never put a service-role or secret key in browser files or GitHub.
-2. Run `supabase_schema.sql` in the Supabase SQL Editor if the table/policies are not already installed.
-3. In Supabase Authentication, configure allowed redirect URLs for the deployed GitHub Pages URL. Set email confirmation according to your preference.
-4. Deploy the account deletion Edge Function using the Supabase CLI and configure the required server-side environment. Never put admin secrets in frontend code.
+## What changed
 
-## Privacy checks before using real financial data
-- Create two test accounts and confirm each begins with its own empty dataset.
-- Add a dummy expense to account A; sign out and sign in as account B; verify the expense is not visible.
-- Test refresh, sign-out, and sign-in from a second device/browser.
-- Verify the `clarity_user_data` table has RLS enabled and the policies restrict rows to `auth.uid() = user_id`.
-- Test account deletion only with a test account after the Edge Function is deployed.
+- The dashboard HTML and CSS are retained unchanged.
+- The existing dashboard, expense, salary, budget, category editing, export, and profile features remain in `js/app.js`.
+- Supabase client creation is now a singleton instead of repeatedly creating clients.
+- Authentication errors and cloud-data read errors are reported as separate stages.
+- Sign-in reads the existing account row before any cloud write.
+- A missing or malformed cloud row is reported without silently replacing it with an empty payload.
+- A local recovery snapshot is retained before the cloud payload replaces the active local cache.
+- A new account's first row is created with `INSERT`, never an upsert that could replace an existing row.
+- Cloud writes continue to use the existing table and `user_id` conflict key.
 
-## Notes
-This is a static website with Supabase as its backend; GitHub Pages does not run server-side PHP, Java, or Python. Server-side actions are handled by Supabase Edge Functions. Validate all auth, RLS, and deletion behavior in the live project before entering real financial data.
+## Deploy to the existing GitHub repository
+
+1. Download and extract this ZIP.
+2. Upload the **contents** of the `clarity-expense-tracker` folder to the root of the existing `Akarshms831/clarity-expense-tracker` repository, preserving `css/`, `js/`, and `supabase/`.
+3. Replace the existing application files when GitHub asks. Do not delete or change anything in Supabase.
+4. Wait for GitHub Pages to publish the commit.
+5. Open the live site and sign in using the existing account.
+
+## Existing database contract
+
+The application continues to read and write only `public.clarity_user_data` using the signed-in user's UUID and the existing JSON `payload` column. Row-level security remains enforced by Supabase. No database migration is part of this release.
+
+## Validation
+
+The JavaScript syntax is checked with Node.js. Live authentication and cloud sync still need to be verified against the user's Supabase project after deployment; a ZIP build cannot prove that the remote service is reachable.
